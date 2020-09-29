@@ -8,13 +8,13 @@ from iris.coords import DimCoord
 from iris.cube import Cube
 from mpl_toolkits.basemap import Basemap
 import cartopy
+import datetime
 
-
-IASI_PATH = '/home/john/projects/alok/data/iasi_nh3_uk_oversampled_2008-2018_0.1_jul2020.nc'
-NAEI_PATH = '/home/john/projects/alok/data/NAEI_total_NH3_0.1x0.1_2016.nc'
-GC_FOLDER_PATH = "/home/john/projects/alok/data"
+IASI_PATH = '/scratch/uptrop/em440/for_Alok/iasi_ncdf/iasi_nh3_uk_oversampled_2008-2018_0.1_jul2020.nc'
+NAEI_PATH = '/scratch/uptrop/em440/for_Alok/naei_nh3/NAEI_total_NH3_0.1x0.1_2016.nc'
+GC_FOLDER_PATH = "/scratch/uptrop/em440/for_Alok/gc_ncdf/"
 WORLD_PATH = '/scratch/uptrop/ap744/shapefiles/Shapfiles_india/World_shp/World'
-FIGURE_DIR = '/home/john/projects/alok/figures/'
+FIGURE_DIR = '/home/j/jfr10/alok/figures'
 
 SAT_UK_LAT_MIN_INDEX = 172
 SAT_UK_LAT_MAX_INDEX = 279
@@ -67,13 +67,14 @@ def main():
 																	NAEI_UK_LAT_MIN_INDEX, NAEI_UK_LAT_MAX_INDEX,
 																	NAEI_UK_LON_MIN_INDEX, NAEI_UK_LON_MAX_INDEX)
 
+	data_emission_uk = data_emission_uk*naei_area
 	naei_monthly_uk = (naei_nh3 * naei_area)/1000   # kg/yr
-
 	uk_mask = np.where(naei_monthly_uk[0] >= 100, 1, 0)  # multiplicative mask, also only one layer
-
 	annual_emission = np.nansum(data_emission_uk, axis=0)   # ALOK: SHOULD THIS BE JUST OVER THE UK?
 
 	iasi_ratios, naei_ratios, differences = [], [], []
+	total_monthly_iasi_emission = []
+	total_monthly_naei_emission = []
 	for iasi_month, naei_month, gc_column_month, data_emission_month \
 			in zip(iasi_monthly_uk, naei_monthly_uk, gc_column_uk, data_emission_uk):
 		masked_iasi_ratio = calc_iasi_nh3(data_emission_month, gc_column_month, iasi_month) * uk_mask
@@ -84,26 +85,37 @@ def main():
 		iasi_ratios.append(masked_iasi_ratio)
 		naei_ratios.append(masked_naei_ratio)
 		differences.append(difference)
+		total_monthly_iasi_emission.append(np.nansum(masked_iasi_ratio))
+		total_monthly_naei_emission.append(np.nansum(masked_naei_ratio)/1000)
 
+	# Plotting
+	pad = 1.1
 	iasi_plot = plt.figure()
-	for month, iasi_ratio in enumerate(iasi_ratios):
-		ax = plt.subplot(1, 1, month + 1, projection=cartopy.crs.PlateCarree())   # Subplot was 3,4 but debugging rn
-		plot_cartopy(iasi_ratio, ax, iasi_lats, iasi_lons, MONTHS[month])
-					# colorbar_min=0, colorbar_max=60)
+	for month, (iasi_ratio, iasi_total) in enumerate(zip(iasi_ratios, total_monthly_iasi_emission)):
+		ax = plt.subplot(3, 4, month + 1, projection=cartopy.crs.PlateCarree())   # Subplot was 3,4 but debugging rn
+		plot_cartopy(iasi_ratio, ax, iasi_lats, iasi_lons, MONTHS[month],
+					colorbar_min=0, colorbar_max=60, colormap = 'rainbow')
+		ax.annotate('IASI NH$_3$ = {0:.2f}'.format(iasi_total) + ' Gg', xy=(0.41, 0.001),
+					xytext=(0, pad),
+					xycoords='axes fraction', textcoords='offset points',
+					ha='center', va='bottom', rotation='horizontal', fontsize=35, color='r')
 	iasi_plot.savefig(os.path.join(FIGURE_DIR, 'IASI_derived_NH3emissionF11W.png'))
 	
 	naei_plot = plt.figure()
-	for month, naei_ratio in enumerate(naei_ratios):
-		ax = plt.subplot(1, 1, month + 1, projection=cartopy.crs.PlateCarree())
-		plot_cartopy(naei_ratio, ax, naei_lats, naei_lons, MONTHS[month])
-					#colorbar_min=0, colorbar_max=60)
-	naei_plot.savefig(os.path.join(FIGURE_DIR, 'NAEI_NH3_emissionF11W.png'))
+	for month, (naei_ratio, naei_total) in enumerate(zip(naei_ratios, total_monthly_naei_emission)):
+		ax = plt.subplot(3, 4, month + 1, projection=cartopy.crs.PlateCarree())
+		plot_cartopy(naei_ratio, ax, naei_lats, naei_lons, MONTHS[month],
+					colorbar_min=0, colorbar_max=60, colormap = 'rainbow')
+		ax.annotate('NAEI NH$_3$ = {0:.2f}'.format(naei_total) + ' Gg', xy=(0.41, 0.001), xytext=(0, pad),
+					xycoords='axes fraction', textcoords='offset points',
+					ha='center', va='bottom', rotation='horizontal', fontsize=35, color='r')
+	naei_plot.savefig(os.path.join(FIGURE_DIR, '{}_NAEI_NH3_emissionF11W.png'))
 
 	diff_plot = plt.figure()
 	for month, difference in enumerate(differences):
-		ax = plt.subplot(1, 1, month + 1, projection=cartopy.crs.PlateCarree())
-		plot_cartopy(difference, ax, naei_lats, naei_lons, MONTHS[month])
-					# colorbar_min=-20, colorbar_max=20)
+		ax = plt.subplot(3, 4, month + 1, projection=cartopy.crs.PlateCarree())
+		plot_cartopy(difference, ax, naei_lats, naei_lons, MONTHS[month],
+					colorbar_min=-20, colorbar_max=20, colormap = 'coolwarm')
 	diff_plot.savefig(os.path.join(FIGURE_DIR, 'NAEI_IASI_difference_emissionF11W.png'))
 
 
@@ -130,26 +142,34 @@ def get_data_for_month(gc_folder, month):
 	satellite_file_list = sorted(glob.glob(satellite_glob))
 	emissions_glob = os.path.join(gc_folder, "emissions", "HEMCO_diagnostics.2016{}*0000.nc".format(month_str))
 	emissions_file_list = sorted(glob.glob(emissions_glob))
+
 	sat_stack_list, emission_stack_list = [], []
 	for sat_file_path, emission_file_path in zip(satellite_file_list, emissions_file_list):
 		sat_stack_list.append(load_and_preproc_sat_data(sat_file_path))
 		emission_stack_list.append(load_and_preproc_emission_data(emission_file_path))
+
 	sat_stack = np.dstack(sat_stack_list)
 	em_stack = np.dstack(emission_stack_list)
 	sat_mean = np.nanmean(sat_stack, axis=2)
 	em_sum = np.nansum(em_stack, axis=2)
+
+	area_file = nc4.Dataset(emissions_file_list[0], 'r')
+	area_raw = area_file.variables['AREA'][:]
+	area_file.close()
+	em_sum = em_sum/area_raw
+
 	return sat_mean, em_sum
 
 
 def load_and_preproc_sat_data(sat_file_path):
 	ncf_sat = nc4.Dataset(sat_file_path, mode='r')
-	nh3_gc_column = ncf_sat.variables['IJ-AVG-S__NH3'][:]
-	airdensity_sat = ncf_sat.variables['TIME-SER__AIRDEN'][:]
-	bxheight_sat = ncf_sat.variables['BXHGHT-S__BXHEIGHT'][:]
+	nh3_gc_column = ncf_sat.variables['IJ-AVG-S__NH3'][:]   # NH3 tracer ppbv
+	airdensity_sat = ncf_sat.variables['TIME-SER__AIRDEN'][:]  # Air density molecules/cm3
+	bxheight_sat = ncf_sat.variables['BXHGHT-S__BXHEIGHT'][:]  # Grid box height 'm'
 	ncf_sat.close()
 
-	bxheight_sat = bxheight_sat*100
-	airdensity_sat = airdensity_sat*bxheight_sat
+	bxheight_sat = bxheight_sat*100 # Grid box height cm
+	airdensity_sat = airdensity_sat*bxheight_sat  #Air density molecules/cm2
 	nh3_gc_column = (nh3_gc_column/1e9)*airdensity_sat
 	return np.nansum(nh3_gc_column, axis=0)
 
@@ -157,11 +177,10 @@ def load_and_preproc_sat_data(sat_file_path):
 def load_and_preproc_emission_data(em_file_path):
 	ncf_em = nc4.Dataset(em_file_path, mode='r')
 	nh3_emission_total = ncf_em.variables['EmisNH3_Total'][:]
-	area_emissions = ncf_em.variables['AREA'][:]
 	ncf_em.close()
 
 	nh3_emission_total = nh3_emission_total[0, :, :, :]
-	nh3_emission_total = np.nansum(nh3_emission_total, axis=0)/area_emissions
+	nh3_emission_total = np.nansum(nh3_emission_total, axis=0)
 	return nh3_emission_total
 
 
@@ -214,8 +233,9 @@ def read_variable_over_area(dataset_path, variable_id,
 
 
 def calc_iasi_nh3(data_emission, regridded_gc_column, iasi_column):
+	iasi_column[iasi_column <= 0] = np.nan
 	gc_ratio = data_emission / regridded_gc_column
-	iasi_nh3 = (gc_ratio * iasi_column)/1000   # I guess in kg?
+	iasi_nh3 = (gc_ratio * iasi_column)/1000   # in kg
 	return iasi_nh3
 
 
@@ -226,7 +246,7 @@ def calc_naei_nh3(data_emission, naei_nh3_area, annual_emission):
 	return naei_nh3
 
 
-def discrete_cmap(N, base_cmap=None):
+def discrete_cmap(N, base_cmap):
 	"""Create an N-bin discrete colormap from the specified input map"""
 	# Note that if base_cmap is a string or None, you can simply do
 	#    return plt.cm.get_cmap(base_cmap, N)
@@ -237,10 +257,11 @@ def discrete_cmap(N, base_cmap=None):
 	return base.from_list(cmap_name, color_list, N)
 
 
-def plot_cartopy(data, ax, lons, lats, title):
+def plot_cartopy(data, ax, lons, lats, title, colorbar_min, colorbar_max, colormap = 'viridis'):
 	# TODO: Add grid ticks and total NH3
 	nan_data = np.where(data == 0, np.nan, data)
-	plt.contourf(lats, lons, nan_data)
+	#cmap = discrete_cmap(20, base_cmap=colormap)
+	plt.pcolormesh(lats, lons, nan_data, cmap= 'rainbow', vmin=colorbar_min, vmax = colorbar_max)
 	ax.coastlines(resolution="10m")
 	plt.title(title)
 
@@ -308,4 +329,3 @@ def plot_dataset(dataset, ax, title, lon_range, lat_range, colorbar_min, colorba
 
 if __name__ == "__main__":
 	main()
-
